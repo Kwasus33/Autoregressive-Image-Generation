@@ -42,24 +42,32 @@ class ImageDatasetHF(Dataset):
 
 
 def load_datasets(config: Config):
+    """
+    Tiny-imagenet:
+        - splits = ['train', 'valid']
+        - dataset item = {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=64x64 at 0x116907380>, 'label': 0}
+    Cifar:
+        - PIL image mode=RGB size=32x32
+    """
     transform = transforms.Compose(
         [
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
-    )  # possible further data augmentation - if we decide so
+    )
 
     if config.dataset_type.name is DatasetType.TINY_IMAGNET:
         dataset = load_dataset("zh-plus/tiny-imagenet", cache_dir=Config.data_dir)
-        # splits = ['train', 'valid']
-        # dataset item = {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=64x64 at 0x116907380>, 'label': 0}
 
         train_data = [(pair["image"], pair["label"]) for pair in dataset["train"]]
         test_data = [(pair["image"], pair["label"]) for pair in dataset["valid"]]
         labels = dataset["train"].features["label"].names
 
-        train_set = ImageDatasetHF(train_data, transform=transform, classes=labels)
-        test_set = ImageDatasetHF(test_data, transform=transform, classes=labels)
+        hf_transforms = transforms.Compose(
+            [*transform.transforms, transforms.Resize((32, 32))]
+        )  # resize to match cifar size
+        train_set = ImageDatasetHF(train_data, transform=hf_transforms, classes=labels)
+        test_set = ImageDatasetHF(test_data, transform=hf_transforms, classes=labels)
 
     elif config.dataset_type.name is DatasetType.CIFAR10:
         train_set = datasets.CIFAR10(
@@ -85,7 +93,7 @@ def load_datasets(config: Config):
     return train_set, val_set, test_set
 
 
-def prep_dataloaders(config: Config):
+def load_dataloaders(config: Config):
     train_set, val_set, test_set = load_datasets(config)
 
     dataloaders = {
