@@ -15,19 +15,18 @@ class DatasetType(Enum):
 
 @dataclass
 class Config:
-    dataset_type: DatasetType = DatasetType.CIFAR10
+    dataset_type: DatasetType
+    data_dir: str
     batch_size: int = 128
     num_workers: int = 4
-    data_dir: str
 
 
 class ImageDatasetHF(Dataset):
-    def __init__(self, pairs, transform=None, target_transform=None, classes=[]):
+    def __init__(self, pairs, transform=None, target_transform=None):
         super().__init__()
         self.pairs = pairs
         self.transform = transform
         self.target_transform = target_transform
-        self.classes = classes
 
     def __len__(self):
         return len(self.pairs)
@@ -56,69 +55,73 @@ def load_datasets(config: Config):
         ]
     )
 
-    if config.dataset_type.name is DatasetType.TINY_IMAGNET:
-        dataset = load_dataset("zh-plus/tiny-imagenet", cache_dir=Config.data_dir)
+    if config.dataset_type is DatasetType.TINY_IMAGNET:
+        dataset = load_dataset("zh-plus/tiny-imagenet", cache_dir=config.data_dir)
 
         train_data = [(pair["image"], pair["label"]) for pair in dataset["train"]]
         test_data = [(pair["image"], pair["label"]) for pair in dataset["valid"]]
-        labels = dataset["train"].features["label"].names
+        classes = dataset["train"].features["label"].names
 
         hf_transforms = transforms.Compose(
-            [*transform.transforms, transforms.Resize((32, 32))]
-        )  # resize to match cifar size
-        train_set = ImageDatasetHF(train_data, transform=hf_transforms, classes=labels)
-        test_set = ImageDatasetHF(test_data, transform=hf_transforms, classes=labels)
+            [
+                transforms.Lambda(lambda img: img.convert("RGB")),
+                transforms.Resize((32, 32)),
+                *transform.transforms,
+            ]
+        )  # tiny-imagenet dataset is of poor quality, can occur monochromatic photo; resize to match cifar size
+        train_set = ImageDatasetHF(train_data, transform=hf_transforms)
+        test_set = ImageDatasetHF(test_data, transform=hf_transforms)
 
-    elif config.dataset_type.name is DatasetType.CIFAR10:
+    elif config.dataset_type is DatasetType.CIFAR10:
         train_set = datasets.CIFAR10(
-            root=Config.data_dir, train=True, transform=transform, download=True
+            root=config.data_dir, train=True, transform=transform, download=True
         )
         test_set = datasets.CIFAR10(
-            root=Config.data_dir, train=False, transform=transform, download=True
+            root=config.data_dir, train=False, transform=transform, download=True
         )
+        classes = train_set.classes
     else:
         train_set = datasets.CIFAR100(
-            root=Config.data_dir, train=True, transform=transform, download=True
+            root=config.data_dir, train=True, transform=transform, download=True
         )
         test_set = datasets.CIFAR100(
-            root=Config.data_dir, train=False, transform=transform, download=True
+            root=config.data_dir, train=False, transform=transform, download=True
         )
+        classes = train_set.classes
 
     train_set, val_set = torch.utils.data.random_split(train_set, [0.9, 0.1])
 
-    print(
-        f"Loaded train dataset: {len(train_set)} images, {len(train_set.classes)} classes."
-    )
+    print(f"Loaded train dataset: {len(train_set)} images, {len(classes)} classes.")
 
-    return train_set, val_set, test_set
+    return train_set, val_set, test_set, classes
 
 
 def load_dataloaders(config: Config):
-    train_set, val_set, test_set = load_datasets(config)
+    train_set, val_set, test_set, classes = load_datasets(config)
 
     dataloaders = {
         "train": DataLoader(
             train_set,
-            batch_size=Config.batch_size,
+            batch_size=config.batch_size,
             shuffle=True,
             drop_last=True,
             pin_memory=True,
-            num_workers=Config.num_workers,
+            num_workers=config.num_workers,
         ),
         "val": DataLoader(
             val_set,
-            batch_size=Config.batch_size,
+            batch_size=config.batch_size,
             shuffle=False,
             drop_last=False,
-            num_workers=Config.num_workers,
+            num_workers=config.num_workers,
         ),
         "test": DataLoader(
             test_set,
-            batch_size=Config.batch_size,
+            batch_size=config.batch_size,
             shuffle=False,
             drop_last=False,
-            num_workers=Config.num_workers,
+            num_workers=config.num_workers,
         ),
     }
 
-    return dataloaders
+    return dataloaders, classes
