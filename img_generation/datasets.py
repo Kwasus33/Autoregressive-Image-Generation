@@ -7,6 +7,36 @@ from torchvision import datasets, transforms
 from datasets import load_dataset
 
 
+PIXEL_CNN_TRANSFORM = transforms.Compose(
+    [
+        transforms.ToTensor(),
+    ]
+)
+
+VAE_TRANSFORM = transforms.Compose(
+    [
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ]
+)
+
+VAE_HF_TRANSORM = transforms.Compose(
+    [
+        transforms.Lambda(lambda img: img.convert("RGB")),
+        transforms.Resize((32, 32)),
+        *VAE_TRANSFORM.transforms,
+    ]
+)  # tiny-imagenet dataset is of poor quality, can occur monochromatic photo; resize to match cifar size
+
+PIXEL_CNN_HF_TRANSORM = transforms.Compose(
+    [
+        transforms.Lambda(lambda img: img.convert("RGB")),
+        transforms.Resize((32, 32)),
+        *PIXEL_CNN_TRANSFORM.transforms,
+    ]
+)
+
+
 class DatasetType(Enum):
     TINY_IMAGNET = 0
     CIFAR10 = 1
@@ -40,7 +70,7 @@ class ImageDatasetHF(Dataset):
         return image, label
 
 
-def load_datasets(config: Config):
+def load_datasets(config: Config, transforms: transforms.Compose):
     """
     Tiny-imagenet:
         - splits = ['train', 'valid']
@@ -48,13 +78,6 @@ def load_datasets(config: Config):
     Cifar:
         - PIL image mode=RGB size=32x32
     """
-    transform = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
-
     if config.dataset_type is DatasetType.TINY_IMAGNET:
         dataset = load_dataset("zh-plus/tiny-imagenet", cache_dir=config.data_dir)
 
@@ -62,30 +85,23 @@ def load_datasets(config: Config):
         test_data = [(pair["image"], pair["label"]) for pair in dataset["valid"]]
         classes = dataset["train"].features["label"].names
 
-        hf_transforms = transforms.Compose(
-            [
-                transforms.Lambda(lambda img: img.convert("RGB")),
-                transforms.Resize((32, 32)),
-                *transform.transforms,
-            ]
-        )  # tiny-imagenet dataset is of poor quality, can occur monochromatic photo; resize to match cifar size
-        train_set = ImageDatasetHF(train_data, transform=hf_transforms)
-        test_set = ImageDatasetHF(test_data, transform=hf_transforms)
+        train_set = ImageDatasetHF(train_data, transform=transforms)
+        test_set = ImageDatasetHF(test_data, transform=transforms)
 
     elif config.dataset_type is DatasetType.CIFAR10:
         train_set = datasets.CIFAR10(
-            root=config.data_dir, train=True, transform=transform, download=True
+            root=config.data_dir, train=True, transform=transforms, download=True
         )
         test_set = datasets.CIFAR10(
-            root=config.data_dir, train=False, transform=transform, download=True
+            root=config.data_dir, train=False, transform=transforms, download=True
         )
         classes = train_set.classes
     else:
         train_set = datasets.CIFAR100(
-            root=config.data_dir, train=True, transform=transform, download=True
+            root=config.data_dir, train=True, transform=transforms, download=True
         )
         test_set = datasets.CIFAR100(
-            root=config.data_dir, train=False, transform=transform, download=True
+            root=config.data_dir, train=False, transform=transforms, download=True
         )
         classes = train_set.classes
 
@@ -96,8 +112,8 @@ def load_datasets(config: Config):
     return train_set, val_set, test_set, classes
 
 
-def load_dataloaders(config: Config):
-    train_set, val_set, test_set, classes = load_datasets(config)
+def load_dataloaders(config: Config, transforms: transforms.Compose):
+    train_set, val_set, test_set, classes = load_datasets(config, transforms)
 
     dataloaders = {
         "train": DataLoader(
