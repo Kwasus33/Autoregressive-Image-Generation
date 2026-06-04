@@ -15,7 +15,7 @@ from pytorch_lightning.callbacks import (
 from tqdm import tqdm
 
 """
-Used UvA Deep Learning Course implementation: https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/tutorial12/Autoregressive_Image_Modeling.html
+Model based on UvA Deep Learning Course implementation: https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/tutorial12/Autoregressive_Image_Modeling.html
 """
 
 
@@ -82,9 +82,7 @@ class GatedMaskedConv(nn.Module):
         super().__init__()
         self.conv_vert = VerticalStackConvolution(c_in, c_out=2 * c_in, **kwargs)
         self.conv_horiz = HorizontalStackConvolution(c_in, c_out=2 * c_in, **kwargs)
-        self.conv_vert_to_horiz = nn.Conv2d(
-            2 * c_in, 2 * c_in, kernel_size=1, padding=0
-        )
+        self.conv_vert_to_horiz = nn.Conv2d(2 * c_in, 2 * c_in, kernel_size=1, padding=0)
         self.conv_horiz_1x1 = nn.Conv2d(c_in, c_in, kernel_size=1, padding=0)
 
     def forward(self, v_stack, h_stack):
@@ -105,10 +103,12 @@ class GatedMaskedConv(nn.Module):
 
 
 class PixelCNN(pl.LightningModule):
-    def __init__(self, c_in, c_hidden):
+    def __init__(self, c_in, c_hidden, num_classes):
         super().__init__()
         self.save_hyperparameters()
 
+        # operations based on number of classes - works for 256 classes of pixel values as well as 16 classes of token values
+        self.num_classes = num_classes
         # Initial convolutions skipping the center pixel
         self.conv_vstack = VerticalStackConvolution(c_in, c_hidden, mask_center=True)
         self.conv_hstack = HorizontalStackConvolution(c_in, c_hidden, mask_center=True)
@@ -124,8 +124,8 @@ class PixelCNN(pl.LightningModule):
                 GatedMaskedConv(c_hidden),
             ]
         )
-        # Output classification convolution (1x1) - predict value of 8bit pixel 0..255 (256 classes)
-        self.conv_out = nn.Conv2d(c_hidden, c_in * 256, kernel_size=1, padding=0)
+        # Output classification convolution (1x1) - e.g. predict value of 8bit pixel 0..255 (256 classes)
+        self.conv_out = nn.Conv2d(c_hidden, c_in * self.num_classes, kernel_size=1, padding=0)
 
         # self.example_input_array = train_set[0][0][None]
 
@@ -133,25 +133,18 @@ class PixelCNN(pl.LightningModule):
         """
         Forward image through model and return logits for each pixel.
         Inputs:
-            x - Image tensor with integer values between 0 and 255.
+            x - Image tensor with integer values between 0 and num_classes-1 (e.g. 0..255 for pixels).
         """
-        # Scale input from 0 to 255 back to -1 to 1
-        x = (x.float() / 255.0) * 2 - 1
+        # At first input must be denormalized (0..255) as loss function caompares predicted pixel value 0..255 to it's orignal value from input !
+        x = (x.float() / float(self.num_classes - 1)) * 2 - 1  # Scale input e.g. for pixels from 0 to 255 back to -1 to 1
 
-        # Initial convolutions
         v_stack = self.conv_vstack(x)
         h_stack = self.conv_hstack(x)
-        # Gated Convolutions
         for layer in self.conv_layers:
             v_stack, h_stack = layer(v_stack, h_stack)
-        # 1x1 classification convolution
-        # Apply ELU before 1x1 convolution for non-linearity on residual connection
-        out = self.conv_out(F.elu(h_stack))
 
-        # Output dimensions: [Batch, Classes, Channels, Height, Width]
-        out = out.reshape(
-            out.shape[0], 256, out.shape[1] // 256, out.shape[2], out.shape[3]
-        )
+        out = self.conv_out(F.elu(h_stack))  # 1x1 classification conv, applied ELU before 1x1 conv for non-linearity on residual connection
+        out = out.reshape(out.shape[0], self.num_classes, out.shape[1] // self.num_classes, out.shape[2], out.shape[3])  # [B, Classes, Ch, H, W]
         return out
 
     def calc_likelihood(self, x):
@@ -171,9 +164,9 @@ class PixelCNN(pl.LightningModule):
                              a starting image. The pixels to fill
                              should be -1 in the input tensor.
         """
-        # Create empty image
         if img is None:
-            img = torch.zeros(img_shape, dtype=torch.long).to(device) - 1
+            img = torch.zeros(img_shape, dtype=torch.long).to(device) - 1  # Create empty image
+
         # Generation loop
         for h in tqdm(range(img_shape[2]), leave=False):
             for w in range(img_shape[3]):
@@ -185,9 +178,7 @@ class PixelCNN(pl.LightningModule):
                     # as all other parts will be skipped by the masked convolutions anyways
                     pred = self.forward(img[:, :, : h + 1, :])
                     probs = F.softmax(pred[:, :, c, h, w], dim=-1)
-                    img[:, c, h, w] = torch.multinomial(probs, num_samples=1).squeeze(
-                        dim=-1
-                    )
+                    img[:, c, h, w] = torch.multinomial(probs, num_samples=1).squeeze(dim=-1)
         return img
 
     def configure_optimizers(self):
@@ -195,6 +186,7 @@ class PixelCNN(pl.LightningModule):
         scheduler = optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.99)
         return [optimizer], [scheduler]
 
+    # Methods called {phase}_step are needed for pl.Trainer to automate training
     def training_step(self, batch, batch_idx):
         loss = self.calc_likelihood(batch[0])
         self.log("train_bpd", loss)
@@ -209,22 +201,11 @@ class PixelCNN(pl.LightningModule):
         self.log("test_bpd", loss)
 
 
-def train_pixel_cnn(
-    epochs: int,
-    dataloaders: DataLoader,
-    device: torch.device,
-    model_path: str,
-    **kwargs,
-):
-    # Create a PyTorch Lightning trainer with the generation callback
+def train_pixel_cnn(epochs: int, dataloaders: DataLoader, device: torch.device, model_path: str, **kwargs):
     trainer = pl.Trainer(
         default_root_dir=os.path.join(model_path, "PixelCNN"),
         # accelerator="auto",
-        accelerator="gpu"
-        if str(device).startswith("cuda")
-        else "mps"
-        if str(device).startswith("mps")
-        else "cpu",
+        accelerator="gpu" if str(device).startswith("cuda") else "mps" if str(device).startswith("mps") else "cpu",
         devices=1,
         max_epochs=epochs,
         enable_progress_bar=True,
@@ -236,9 +217,10 @@ def train_pixel_cnn(
             TQDMProgressBar(refresh_rate=1),
         ],
     )
+
     result = None
-    # Check whether pretrained model exists. If yes, load it and skip training
     pretrained_filename = os.path.join(model_path, "PixelCNN.ckpt")
+
     if os.path.isfile(pretrained_filename):
         print("Found pretrained model, loading...")
         model = PixelCNN.load_from_checkpoint(pretrained_filename)
@@ -247,11 +229,12 @@ def train_pixel_cnn(
     else:
         model = PixelCNN(**kwargs)
         trainer.fit(model, dataloaders["train"], dataloaders["val"])
+
     model = model.to(device)
 
-    if result is None:
-        # Test best model on validation and test set
+    if result is None:  # best model is tested on val, test datsets
         val_result = trainer.test(model, dataloaders["val"], verbose=False)
         test_result = trainer.test(model, dataloaders["test"], verbose=False)
         result = {"test": test_result, "val": val_result}
+
     return model, result
