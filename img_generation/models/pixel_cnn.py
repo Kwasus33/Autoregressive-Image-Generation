@@ -4,9 +4,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from torch import optim
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.callbacks import (
+    LearningRateMonitor,
+    ModelCheckpoint,
+    TQDMProgressBar,
+)
 from tqdm import tqdm
 
 """
@@ -202,3 +207,51 @@ class PixelCNN(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         loss = self.calc_likelihood(batch[0])
         self.log("test_bpd", loss)
+
+
+def train_pixel_cnn(
+    epochs: int,
+    dataloaders: DataLoader,
+    device: torch.device,
+    model_path: str,
+    **kwargs,
+):
+    # Create a PyTorch Lightning trainer with the generation callback
+    trainer = pl.Trainer(
+        default_root_dir=os.path.join(model_path, "PixelCNN"),
+        # accelerator="auto",
+        accelerator="gpu"
+        if str(device).startswith("cuda")
+        else "mps"
+        if str(device).startswith("mps")
+        else "cpu",
+        devices=1,
+        max_epochs=epochs,
+        enable_progress_bar=True,
+        enable_model_summary=True,
+        log_every_n_steps=1,
+        callbacks=[
+            ModelCheckpoint(save_weights_only=True, mode="min", monitor="val_bpd"),
+            LearningRateMonitor("epoch"),
+            TQDMProgressBar(refresh_rate=1),
+        ],
+    )
+    result = None
+    # Check whether pretrained model exists. If yes, load it and skip training
+    pretrained_filename = os.path.join(model_path, "PixelCNN.ckpt")
+    if os.path.isfile(pretrained_filename):
+        print("Found pretrained model, loading...")
+        model = PixelCNN.load_from_checkpoint(pretrained_filename)
+        ckpt = torch.load(pretrained_filename, map_location=device)
+        result = ckpt.get("result", None)
+    else:
+        model = PixelCNN(**kwargs)
+        trainer.fit(model, dataloaders["train"], dataloaders["val"])
+    model = model.to(device)
+
+    if result is None:
+        # Test best model on validation and test set
+        val_result = trainer.test(model, dataloaders["val"], verbose=False)
+        test_result = trainer.test(model, dataloaders["test"], verbose=False)
+        result = {"test": test_result, "val": val_result}
+    return model, result
