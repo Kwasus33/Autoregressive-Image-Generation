@@ -100,10 +100,9 @@ class GatedMaskedConv(nn.Module):
 
 
 class PixelCNN(pl.LightningModule):
-    def __init__(self, c_in, c_hidden, num_classes):
+    def __init__(self, c_in, c_hidden):
         super().__init__()
         self.save_hyperparameters()
-        self.num_classes = num_classes
 
         # Initial convolutions skipping the center pixel
         self.conv_vstack = VerticalStackConvolution(c_in, c_hidden, mask_center=True)
@@ -120,18 +119,19 @@ class PixelCNN(pl.LightningModule):
                 GatedMaskedConv(c_hidden),
             ]
         )
-        # Output classification convolution (1x1)
-        self.conv_out = nn.Conv2d(c_hidden, c_in, kernel_size=1, padding=0)
+        # Output classification convolution (1x1) - predict value of 8bit pixel 0..255 (256 classes)
+        self.conv_out = nn.Conv2d(c_hidden, c_in * 256, kernel_size=1, padding=0)
+
         # self.example_input_array = train_set[0][0][None]
 
     def forward(self, x):
         """
         Forward image through model and return logits for each pixel.
         Inputs:
-            x - Image tensor with integer values between 0 and 1.   (already normalized)
+            x - Image tensor with integer values between 0 and 255.
         """
-        # Scale input from 0-1 to -1 to 1
-        x = x.float() * 2 - 1
+        # Scale input from 0 to 255 back to -1 to 1
+        x = (x.float() / 255.0) * 2 - 1
 
         # Initial convolutions
         v_stack = self.conv_vstack(x)
@@ -145,11 +145,7 @@ class PixelCNN(pl.LightningModule):
 
         # Output dimensions: [Batch, Classes, Channels, Height, Width]
         out = out.reshape(
-            out.shape[0],
-            self.num_classes,
-            out.shape[1],
-            out.shape[2],
-            out.shape[3],
+            out.shape[0], 256, out.shape[1] // 256, out.shape[2], out.shape[3]
         )
         return out
 
@@ -206,41 +202,3 @@ class PixelCNN(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         loss = self.calc_likelihood(batch[0])
         self.log("test_bpd", loss)
-
-
-def train_pixel_cnn(dataloaders, device, model_path="", **kwargs):
-    # Create a PyTorch Lightning trainer with the generation callback
-    trainer = pl.Trainer(
-        default_root_dir=os.path.join(model_path, "PixelCNN"),
-        accelerator="gpu"
-        if (str(device).startswith("cuda") or str(device).startswith("mps"))
-        else "cpu",
-        devices=1,
-        max_epochs=75,
-        callbacks=[
-            ModelCheckpoint(save_weights_only=True, mode="min", monitor="val_bpd"),
-            LearningRateMonitor("epoch"),
-        ],
-    )
-    result = None
-
-    # Check whether pretrained model exists. If yes, load it and skip training
-    pretrained_filename = os.path.join(model_path, "PixelCNN.ckpt")
-    if os.path.isfile(pretrained_filename):
-        print("Found pretrained model, loading...")
-        model = PixelCNN.load_from_checkpoint(pretrained_filename)
-        ckpt = torch.load(pretrained_filename, map_location=device)
-        result = ckpt.get("result", None)
-    else:
-        model = PixelCNN(**kwargs)
-        trainer.fit(model, dataloaders["train"], dataloaders["val"])
-
-    model = model.to(device)
-
-    if result is None:
-        # Test best model on validation and test set
-        val_result = trainer.test(model, dataloaders["val"], verbose=False)
-        test_result = trainer.test(model, dataloaders["test"], verbose=False)
-        result = {"test": test_result, "val": val_result}
-
-    return model, result

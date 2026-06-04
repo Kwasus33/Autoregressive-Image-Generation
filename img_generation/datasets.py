@@ -7,16 +7,24 @@ from torchvision import datasets, transforms
 from datasets import load_dataset
 
 
-PIXEL_CNN_TRANSFORM = transforms.Compose(
-    [
-        transforms.ToTensor(),
-    ]
-)
+def discretize(sample):
+    return (sample * 255).to(torch.long)
+
+
+PIXEL_CNN_TRANSFORM = transforms.Compose([transforms.ToTensor(), discretize])
 
 VAE_TRANSFORM = transforms.Compose(
     [
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ]
+)
+
+PIXEL_CNN_HF_TRANSORM = transforms.Compose(
+    [
+        transforms.Lambda(lambda img: img.convert("RGB")),
+        transforms.Resize((32, 32)),
+        *PIXEL_CNN_TRANSFORM.transforms,
     ]
 )
 
@@ -27,14 +35,6 @@ VAE_HF_TRANSORM = transforms.Compose(
         *VAE_TRANSFORM.transforms,
     ]
 )  # tiny-imagenet dataset is of poor quality, can occur monochromatic photo; resize to match cifar size
-
-PIXEL_CNN_HF_TRANSORM = transforms.Compose(
-    [
-        transforms.Lambda(lambda img: img.convert("RGB")),
-        transforms.Resize((32, 32)),
-        *PIXEL_CNN_TRANSFORM.transforms,
-    ]
-)
 
 
 class DatasetType(Enum):
