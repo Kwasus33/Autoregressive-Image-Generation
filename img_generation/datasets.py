@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
+import pickle
+import os
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -70,6 +72,32 @@ class ImageDatasetHF(Dataset):
         return image, label
 
 
+def _pickle_data(data: tuple, config: Config):
+    train_set, val_set, test_set, classes = data
+
+    with open(os.path.join([config.data_dir, "train.pkl"]), "rb") as fh:
+        pickle.dump(train_set, fh)
+    with open(os.path.join([config.data_dir, "val.pkl"]), "rb") as fh:
+        pickle.load(val_set, fh)
+    with open(os.path.join([config.data_dir, "test.pkl"]), "rb") as fh:
+        pickle.load(test_set, fh)
+    with open(os.path.join([config.data_dir, "classes.pkl"]), "rb") as fh:
+        pickle.load(classes, fh)
+
+
+def _unpickle_data(config: Config):
+    with open(os.path.join([config.data_dir, "train.pkl"]), "rb") as fh:
+        train_set = pickle.load(fh)
+    with open(os.path.join([config.data_dir, "val.pkl"]), "rb") as fh:
+        val_set = pickle.load(fh)
+    with open(os.path.join([config.data_dir, "test.pkl"]), "rb") as fh:
+        test_set = pickle.load(fh)
+    with open(os.path.join([config.data_dir, "classes.pkl"]), "rb") as fh:
+        classes = pickle.load(fh)
+
+    return train_set, val_set, test_set, classes
+
+
 def load_datasets(config: Config, transforms: transforms.Compose):
     """
     Tiny-imagenet:
@@ -78,34 +106,39 @@ def load_datasets(config: Config, transforms: transforms.Compose):
     Cifar:
         - PIL image mode=RGB size=32x32
     """
-    if config.dataset_type is DatasetType.TINY_IMAGNET:
-        dataset = load_dataset("zh-plus/tiny-imagenet", cache_dir=config.data_dir)
 
-        train_data = [(pair["image"], pair["label"]) for pair in dataset["train"]]
-        test_data = [(pair["image"], pair["label"]) for pair in dataset["valid"]]
-        classes = dataset["train"].features["label"].names
+    is_dataset_prepared = all(
+        [
+            os.path.exists(),
+            os.path.exists(os.path.join([config.data_dir, "val.pkl"])),
+            os.path.exists(os.path.join([config.data_dir, "test.pkl"])),
+        ]
+    )
 
-        train_set = ImageDatasetHF(train_data, transform=transforms)
-        test_set = ImageDatasetHF(test_data, transform=transforms)
+    if not is_dataset_prepared:
+        if config.dataset_type is DatasetType.TINY_IMAGNET:
+            dataset = load_dataset("zh-plus/tiny-imagenet", cache_dir=config.data_dir)
 
-    elif config.dataset_type is DatasetType.CIFAR10:
-        train_set = datasets.CIFAR10(
-            root=config.data_dir, train=True, transform=transforms, download=True
-        )
-        test_set = datasets.CIFAR10(
-            root=config.data_dir, train=False, transform=transforms, download=True
-        )
-        classes = train_set.classes
-    else:
-        train_set = datasets.CIFAR100(
-            root=config.data_dir, train=True, transform=transforms, download=True
-        )
-        test_set = datasets.CIFAR100(
-            root=config.data_dir, train=False, transform=transforms, download=True
-        )
-        classes = train_set.classes
+            train_data = [(pair["image"], pair["label"]) for pair in dataset["train"]]
+            test_data = [(pair["image"], pair["label"]) for pair in dataset["valid"]]
+            classes = dataset["train"].features["label"].names
 
-    train_set, val_set = torch.utils.data.random_split(train_set, [0.9, 0.1])
+            train_set = ImageDatasetHF(train_data, transform=transforms)
+            test_set = ImageDatasetHF(test_data, transform=transforms)
+
+        elif config.dataset_type is DatasetType.CIFAR10:
+            train_set = datasets.CIFAR10(root=config.data_dir, train=True, transform=transforms, download=True)
+            test_set = datasets.CIFAR10(root=config.data_dir, train=False, transform=transforms, download=True)
+            classes = train_set.classes
+        else:
+            train_set = datasets.CIFAR100(root=config.data_dir, train=True, transform=transforms, download=True)
+            test_set = datasets.CIFAR100(root=config.data_dir, train=False, transform=transforms, download=True)
+            classes = train_set.classes
+
+        train_set, val_set = torch.utils.data.random_split(train_set, [0.9, 0.1])
+        _pickle_data((train_set, val_set, test_set, classes), config)
+
+    train_set, val_set, test_set, classes = _unpickle_data(config)
 
     print(f"Loaded train dataset: {len(train_set)} images, {len(classes)} classes.")
 
