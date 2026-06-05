@@ -204,7 +204,8 @@ class PixelCNN(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         loss, pred = self.calc_likelihood(batch[0])
         self.log("test_bpd", loss)
-        self.log("pred", pred)
+        # if batch_idx == 0:
+        #     self.logger.experiment.add_image("Test_Predictions", pred[0], self.current_epoch)
 
 
 def train_pixel_cnn(epochs: int, dataloaders: DataLoader, device: torch.device, model_path: str, **kwargs):
