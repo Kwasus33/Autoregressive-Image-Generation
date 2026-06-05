@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch import optim
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
@@ -203,11 +204,12 @@ class PixelCNN(pl.LightningModule):
 
 def train_pixel_cnn(epochs: int, dataloaders: DataLoader, device: torch.device, model_path: str, **kwargs):
     trainer = pl.Trainer(
-        default_root_dir=os.path.join(model_path, "PixelCNN"),
+        default_root_dir=model_path,
         # accelerator="auto",
         accelerator="gpu" if str(device).startswith("cuda") else "mps" if str(device).startswith("mps") else "cpu",
         devices=1,
         max_epochs=epochs,
+        logger=CSVLogger(model_path, name="logs_pixelcnn"),
         enable_progress_bar=True,
         enable_model_summary=True,
         log_every_n_steps=1,

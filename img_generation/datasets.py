@@ -48,6 +48,7 @@ class DatasetType(Enum):
 @dataclass
 class Config:
     dataset_type: DatasetType
+    model_type: str
     data_dir: str
     batch_size: int = 128
     num_workers: int = 4
@@ -74,12 +75,12 @@ class ImageDatasetHF(Dataset):
 
 
 def _save_split_indices(indices: tuple, config: Config):
-    with open(os.path.join([config.data_dir, "indices.json"]), "w") as fh:
+    with open(os.path.join(config.data_dir, "indices.json"), "w") as fh:
         json.dump(indices, fh)
 
 
 def _load_split_indices(config: Config):
-    with open(os.path.join([config.data_dir, "indices.json"]), "r") as fh:
+    with open(os.path.join(config.data_dir, "indices.json"), "r") as fh:
         indices = json.load(fh)
     return indices
 
@@ -95,7 +96,7 @@ def load_datasets(config: Config, transforms: transforms.Compose):
     os.makedirs(config.data_dir, exist_ok=True)
 
     if config.dataset_type is DatasetType.TINY_IMAGNET:
-        dataset = load_dataset("zh-plus/tiny-imagenet", cache_dir=config.data_dir)
+        dataset = load_dataset("zh-plus/tiny-imagenet", cache_dir=os.path.join(config.data_dir, config.model_type))
 
         train_data = [(pair["image"], pair["label"]) for pair in dataset["train"]]
         test_data = [(pair["image"], pair["label"]) for pair in dataset["valid"]]
@@ -105,15 +106,15 @@ def load_datasets(config: Config, transforms: transforms.Compose):
         test_set = ImageDatasetHF(test_data, transform=transforms)
 
     elif config.dataset_type is DatasetType.CIFAR10:
-        train_set = datasets.CIFAR10(root=config.data_dir, train=True, transform=transforms, download=True)
-        test_set = datasets.CIFAR10(root=config.data_dir, train=False, transform=transforms, download=True)
+        train_set = datasets.CIFAR10(root=os.path.join(config.data_dir, config.model_type), train=True, transform=transforms, download=True)
+        test_set = datasets.CIFAR10(root=os.path.join(config.data_dir, config.model_type), train=False, transform=transforms, download=True)
         classes = train_set.classes
     else:
-        train_set = datasets.CIFAR100(root=config.data_dir, train=True, transform=transforms, download=True)
-        test_set = datasets.CIFAR100(root=config.data_dir, train=False, transform=transforms, download=True)
+        train_set = datasets.CIFAR100(root=os.path.join(config.data_dir, config.model_type), train=True, transform=transforms, download=True)
+        test_set = datasets.CIFAR100(root=os.path.join(config.data_dir, config.model_type), train=False, transform=transforms, download=True)
         classes = train_set.classes
 
-    if not os.path.exists(os.path.join([config.data_dir, "indices.json"])):
+    if not os.path.exists(os.path.join(config.data_dir, "indices.json")):  # save indices so all models have similarly splitted datasets
         total_len = len(train_set)
         train_len = int(total_len * 0.9)
         val_len = total_len - train_len
