@@ -157,7 +157,7 @@ class PixelCNN(pl.LightningModule):
         pred = self.forward(x)
         nll = F.cross_entropy(pred, x, reduction="none")
         bpd = nll.mean(dim=[1, 2, 3]) * np.log2(np.exp(1))
-        return bpd.mean()
+        return bpd.mean(), pred
 
     @torch.no_grad()
     def sample(self, img_shape, img=None, device=torch.device("cpu")):
@@ -193,17 +193,18 @@ class PixelCNN(pl.LightningModule):
 
     # Methods called {phase}_step are needed for pl.Trainer to automate training
     def training_step(self, batch, batch_idx):
-        loss = self.calc_likelihood(batch[0])
+        loss, pred = self.calc_likelihood(batch[0])
         self.log("train_bpd", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss = self.calc_likelihood(batch[0])
+        loss, pred = self.calc_likelihood(batch[0])
         self.log("val_bpd", loss)
 
     def test_step(self, batch, batch_idx):
-        loss = self.calc_likelihood(batch[0])
+        loss, pred = self.calc_likelihood(batch[0])
         self.log("test_bpd", loss)
+        self.log("pred", pred)
 
 
 def train_pixel_cnn(epochs: int, dataloaders: DataLoader, device: torch.device, model_path: str, **kwargs):
