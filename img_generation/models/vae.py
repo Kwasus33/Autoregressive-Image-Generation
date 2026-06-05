@@ -8,6 +8,9 @@ import torchmetrics
 from tqdm import tqdm
 
 
+NUM_EMBEDDINGS = 1024
+
+
 class ConvBlock(nn.Module):
     def __init__(self, input_channels, hidden_dim_ch):
         super().__init__()
@@ -23,9 +26,9 @@ class ConvBlock(nn.Module):
             nn.SiLU(),
             nn.Conv2d(in_channels=self.hidden_dim_ch, out_channels=2 * self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1),  # 16x16 -> 8x8
             nn.GroupNorm(num_groups=8, num_channels=2 * self.hidden_dim_ch),
-            nn.SiLU(),
-            nn.Conv2d(in_channels=2 * self.hidden_dim_ch, out_channels=4 * self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1),  # 8x8 -> 4x4
-            nn.GroupNorm(num_groups=8, num_channels=4 * self.hidden_dim_ch),
+            # nn.SiLU(),
+            # nn.Conv2d(in_channels=2 * self.hidden_dim_ch, out_channels=4 * self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1),  # 8x8 -> 4x4
+            # nn.GroupNorm(num_groups=8, num_channels=4 * self.hidden_dim_ch),
         )
 
     def forward(self, x):
@@ -49,11 +52,11 @@ class DeconvBlock(nn.Module):
             nn.ConvTranspose2d(
                 in_channels=2 * self.hidden_dim_ch, out_channels=self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1
             ),  # 8x8-> 16x16
-            nn.GroupNorm(num_groups=8, num_channels=self.hidden_dim_ch),
-            nn.SiLU(),
-            nn.ConvTranspose2d(
-                in_channels=self.hidden_dim_ch, out_channels=self.output_channels, kernel_size=(4, 4), stride=2, padding=1
-            ),  # 16x16 -> 32x32
+            # nn.GroupNorm(num_groups=8, num_channels=self.hidden_dim_ch),
+            # nn.SiLU(),
+            # nn.ConvTranspose2d(
+            #     in_channels=self.hidden_dim_ch, out_channels=self.output_channels, kernel_size=(4, 4), stride=2, padding=1
+            # ),  # 16x16 -> 32x32
         )
 
     def forward(self, x):
@@ -230,7 +233,9 @@ def train_vae(
 
             current_lr = lr_scheduler.get_last_lr()[0]
             total_mean_loss = total_loss_metric.compute()
+            total_mean_loss /= len(x)
             reconst_mean_loss = reconst_loss_metric.compute()
+            reconst_mean_loss /= len(x)
 
             print(
                 f"(Epoch {epoch}/[{phase}]) -> Total Loss:\t{total_mean_loss:.3f} -> Reconstruction Loss:\t{reconst_mean_loss:.3f} -> lr: {current_lr}"
@@ -291,20 +296,25 @@ class VQEmbedding(nn.Module):
 
 
 class VQVAE(nn.Module):
-    def __init__(self, in_channels, latent_dim, num_embeddings):
+    def __init__(self, in_channels, hidden_dim, num_embeddings):
+        """
+        latent_dim_channels = 4 * hidden_dim
+        """
         super(VQVAE, self).__init__()
 
-        self.encoder = ConvBlock(
-            input_channels=in_channels, hidden_dim_ch=latent_dim
-        )  # encoder lattent_dim would is 4*hidden_dim (here 4*latent_dim)
-        self.vq_layer = VQEmbedding(num_embeddings, 4 * latent_dim)  # Vector Quantization
-        self.decoder = DeconvBlock(hidden_dim_ch=latent_dim, output_channels=in_channels)
+        self.encoder = ConvBlock(input_channels=in_channels, hidden_dim_ch=hidden_dim)  # encoder lattent_dim would is 4*hidden_dim
+        self.vq_layer = VQEmbedding(num_embeddings, 4 * hidden_dim)  # Vector Quantization
+        self.decoder = DeconvBlock(hidden_dim_ch=hidden_dim, output_channels=in_channels)
         self.normalize = nn.Sigmoid()
         # self.normalize = nn.Tanh()  # Output values in range [-1, 1] - used if input values are normalized to [-1, 1]
 
-    def forward(self, x):
+    def encode(self, x):
         z_e = self.encoder(x)
-        z_q, vq_loss, _ = self.vq_layer(z_e)
+        z_q, vq_loss, encoding_indices = self.vq_layer(z_e)
+        return z_q, vq_loss, encoding_indices
+
+    def forward(self, x):
+        z_q, vq_loss, _ = self.encode(x)
         x_recon = self.normalize(self.decoder(z_q))
         return x_recon, vq_loss
 
@@ -359,6 +369,7 @@ def train_vq_vae(
 
             current_lr = lr_scheduler.get_last_lr()[0]
             mean_loss = loss_metric.compute()
+            mean_loss /= len(x)
 
             print(f"(Epoch {epoch}/[{phase}]) -> Total Loss:\t{mean_loss:.3f} -> lr: {current_lr}")
 

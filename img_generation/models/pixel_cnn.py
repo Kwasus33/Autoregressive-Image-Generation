@@ -136,8 +136,10 @@ class PixelCNN(pl.LightningModule):
         Inputs:
             x - Image tensor with integer values between 0 and num_classes-1 (e.g. 0..255 for pixels).
         """
-        # At first input must be denormalized (0..255) as loss function caompares predicted pixel value 0..255 to it's orignal value from input !
-        x = (x.float() / float(self.num_classes - 1)) * 2 - 1  # Scale input e.g. for pixels from 0 to 255 back to -1 to 1
+        # At first input must be denormalized (0..255) as loss function campares predicted pixel value 0..255 to it's orignal value from input !
+        x = (
+            x.float() / float(self.num_classes - 1)
+        ) * 2 - 1  # Scale input e.g. for pixels from 0 to 255 back to -1 to 1 or for tokens indices of value [0, K-1] to [-1, 1]
 
         v_stack = self.conv_vstack(x)
         h_stack = self.conv_hstack(x)
@@ -145,7 +147,9 @@ class PixelCNN(pl.LightningModule):
             v_stack, h_stack = layer(v_stack, h_stack)
 
         out = self.conv_out(F.elu(h_stack))  # 1x1 classification conv, applied ELU before 1x1 conv for non-linearity on residual connection
-        out = out.reshape(out.shape[0], self.num_classes, out.shape[1] // self.num_classes, out.shape[2], out.shape[3])  # [B, Classes, Ch, H, W]
+        out = out.reshape(
+            out.shape[0], self.num_classes, out.shape[1] // self.num_classes, out.shape[2], out.shape[3]
+        )  # [B, Classes_preds, Ch, H, W]
         return out
 
     def calc_likelihood(self, x):
