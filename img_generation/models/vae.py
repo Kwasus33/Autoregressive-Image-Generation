@@ -21,10 +21,12 @@ class ConvBlock(nn.Module):
         self.conv_layers = nn.Sequential(
             nn.Conv2d(
                 in_channels=self.input_channels, out_channels=self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1
-            ),  # 32x32 -> 16x16 [(32+1+1-4)//2 + 1]
+            ),  # 32x32 -> 16x16 [(32+1+1-4)//2 + 1]; 28x28 -> 14x14
             nn.GroupNorm(num_groups=8, num_channels=self.hidden_dim_ch),
             nn.SiLU(),
-            nn.Conv2d(in_channels=self.hidden_dim_ch, out_channels=2 * self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1),  # 16x16 -> 8x8
+            nn.Conv2d(
+                in_channels=self.hidden_dim_ch, out_channels=2 * self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1
+            ),  # 16x16 -> 8x8; 14x14 -> 7x7
             nn.GroupNorm(num_groups=8, num_channels=2 * self.hidden_dim_ch),
         )
 

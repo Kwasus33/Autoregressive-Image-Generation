@@ -4,7 +4,7 @@ import json
 import os
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, Subset, TensorDataset, DataLoader
 from torchvision import datasets, transforms
 from datasets import load_dataset
 
@@ -22,27 +22,28 @@ VAE_TRANSFORM = transforms.Compose(
     ]
 )
 
-PIXEL_CNN_HF_TRANSORM = transforms.Compose(
-    [
-        transforms.Lambda(lambda img: img.convert("RGB")),
-        transforms.Resize((32, 32)),
-        *PIXEL_CNN_TRANSFORM.transforms,
-    ]
-)
+# PIXEL_CNN_HF_TRANSORM = transforms.Compose(
+#     [
+#         transforms.Lambda(lambda img: img.convert("RGB")),
+#         transforms.Resize((32, 32)),
+#         *PIXEL_CNN_TRANSFORM.transforms,
+#     ]
+# )
 
-VAE_HF_TRANSORM = transforms.Compose(
-    [
-        transforms.Lambda(lambda img: img.convert("RGB")),
-        transforms.Resize((32, 32)),
-        *VAE_TRANSFORM.transforms,
-    ]
-)  # tiny-imagenet dataset is of poor quality, can occur monochromatic photo; resize to match cifar size
+# VAE_HF_TRANSORM = transforms.Compose(
+#     [
+#         transforms.Lambda(lambda img: img.convert("RGB")),
+#         transforms.Resize((32, 32)),
+#         *VAE_TRANSFORM.transforms,
+#     ]
+# )  # tiny-imagenet dataset is of poor quality, can occur monochromatic photo; resize to match cifar size
 
 
 class DatasetType(Enum):
     TINY_IMAGNET = 0
     CIFAR10 = 1
     CIFAR100 = 2
+    FASHION_MNIST = 3
 
 
 @dataclass
@@ -85,34 +86,38 @@ def _load_split_indices(config: Config):
     return indices
 
 
-def load_datasets(config: Config, transforms: transforms.Compose):
+# is_grayscale=True flag added as pixelCNN++ model implementation for RGB photos might be added in future if more powerful GPU resources are available
+# as well 3 channels RGB data can be used for 'tokenized pixel cnn' approach (pixel cnn + vq-vae)
+def load_datasets(config: Config, transform: transforms.Compose, is_grayscale=True):
     """
     Tiny-imagenet:
         - splits = ['train', 'valid']
         - dataset item = {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=64x64 at 0x116907380>, 'label': 0}
     Cifar:
         - PIL image mode=RGB size=32x32
+    FashionMNIST:
+        - PIL image mode=Mono (1channel) size=28x28
     """
     os.makedirs(config.data_dir, exist_ok=True)
 
-    if config.dataset_type is DatasetType.TINY_IMAGNET:
-        dataset = load_dataset("zh-plus/tiny-imagenet", cache_dir=os.path.join(config.data_dir, config.model_type))
-
-        train_data = [(pair["image"], pair["label"]) for pair in dataset["train"]]
-        test_data = [(pair["image"], pair["label"]) for pair in dataset["valid"]]
-        classes = dataset["train"].features["label"].names
-
-        train_set = ImageDatasetHF(train_data, transform=transforms)
-        test_set = ImageDatasetHF(test_data, transform=transforms)
-
+    if config.dataset_type is DatasetType.FASHION_MNIST:
+        train_set = datasets.FashionMNIST(root=os.path.join(config.data_dir, config.model_type), train=True, transform=transform, download=True)
+        test_set = datasets.FashionMNIST(root=os.path.join(config.data_dir, config.model_type), train=False, transform=transform, download=True)
+        classes = train_set.classes
     elif config.dataset_type is DatasetType.CIFAR10:
-        train_set = datasets.CIFAR10(root=os.path.join(config.data_dir, config.model_type), train=True, transform=transforms, download=True)
-        test_set = datasets.CIFAR10(root=os.path.join(config.data_dir, config.model_type), train=False, transform=transforms, download=True)
+        if is_grayscale:
+            transform = transforms.Compose([transforms.Grayscale(num_output_channels=1), *transform.transforms])
+        train_set = datasets.CIFAR10(root=os.path.join(config.data_dir, config.model_type), train=True, transform=transform, download=True)
+        test_set = datasets.CIFAR10(root=os.path.join(config.data_dir, config.model_type), train=False, transform=transform, download=True)
+        classes = train_set.classes
+    elif config.dataset_type is DatasetType.CIFAR100:
+        if is_grayscale:
+            transform = transforms.Compose([transforms.Grayscale(num_output_channels=1), *transform.transforms])
+        train_set = datasets.CIFAR100(root=os.path.join(config.data_dir, config.model_type), train=True, transform=transform, download=True)
+        test_set = datasets.CIFAR100(root=os.path.join(config.data_dir, config.model_type), train=False, transform=transform, download=True)
         classes = train_set.classes
     else:
-        train_set = datasets.CIFAR100(root=os.path.join(config.data_dir, config.model_type), train=True, transform=transforms, download=True)
-        test_set = datasets.CIFAR100(root=os.path.join(config.data_dir, config.model_type), train=False, transform=transforms, download=True)
-        classes = train_set.classes
+        raise Exception("Wrong dataset argument passed - choose one of available datasets as DatasetType class value")
 
     if not os.path.exists(os.path.join(config.data_dir, "indices.json")):  # save indices so all models have similarly splitted datasets
         total_len = len(train_set)
@@ -127,16 +132,16 @@ def load_datasets(config: Config, transforms: transforms.Compose):
 
     indices = _load_split_indices(config)
     train_idx, val_idx = indices["train_indices"], indices["val_indices"]
-    train_set = torch.utils.data.Subset(train_set, train_idx)
-    val_set = torch.utils.data.Subset(train_set.dataset, val_idx)
+    train_set = Subset(train_set, train_idx)
+    val_set = Subset(train_set.dataset, val_idx)
 
     print(f"Loaded train dataset: {len(train_set)} images, {len(classes)} classes.")
 
     return train_set, val_set, test_set, classes
 
 
-def load_dataloaders(config: Config, transforms: transforms.Compose):
-    train_set, val_set, test_set, classes = load_datasets(config, transforms)
+def load_dataloaders(config: Config, transform: transforms.Compose):
+    train_set, val_set, test_set, classes = load_datasets(config, transform)
 
     dataloaders = {
         "train": DataLoader(
