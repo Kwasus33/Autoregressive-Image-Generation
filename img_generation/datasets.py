@@ -14,6 +14,13 @@ def discretize(sample):
 
 PIXEL_CNN_TRANSFORM = transforms.Compose([transforms.ToTensor(), discretize])
 
+VAE_TRANSFORM_MONO = transforms.Compose(
+    [
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5], std=[0.5]),
+    ]
+)
+
 VAE_TRANSFORM = transforms.Compose(
     [
         transforms.ToTensor(),
