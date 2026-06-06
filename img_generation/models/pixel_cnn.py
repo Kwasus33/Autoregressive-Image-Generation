@@ -15,6 +15,8 @@ from pytorch_lightning.callbacks import (
 )
 from tqdm import tqdm
 
+from img_generation.utils import visualize_val_reconstruction
+
 """
 Model based on UvA Deep Learning Course implementation: https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/tutorial12/Autoregressive_Image_Modeling.html
 """
@@ -200,12 +202,15 @@ class PixelCNN(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss, pred = self.calc_likelihood(batch[0])
         self.log("val_bpd", loss)
+        if batch_idx == 0:
+            pred_pixels = pred.argmax(dim=1)
+            pred_pixels = pred_pixels.float() / 255.0
+            real_imgs = batch[0] / 255.0
+            visualize_val_reconstruction(real_imgs.cpu(), pred_pixels.cpu())
 
     def test_step(self, batch, batch_idx):
         loss, pred = self.calc_likelihood(batch[0])
         self.log("test_bpd", loss)
-        # if batch_idx == 0:
-        #     self.logger.experiment.add_image("Test_Predictions", pred[0], self.current_epoch)
 
 
 def train_pixel_cnn(epochs: int, dataloaders: DataLoader, device: torch.device, model_path: str, **kwargs):

@@ -4,9 +4,8 @@ import json
 import os
 
 import torch
-from torch.utils.data import Dataset, Subset, TensorDataset, DataLoader
+from torch.utils.data import Dataset, Subset, DataLoader
 from torchvision import datasets, transforms
-from datasets import load_dataset
 
 
 def discretize(sample):
@@ -21,22 +20,6 @@ VAE_TRANSFORM = transforms.Compose(
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ]
 )
-
-# PIXEL_CNN_HF_TRANSORM = transforms.Compose(
-#     [
-#         transforms.Lambda(lambda img: img.convert("RGB")),
-#         transforms.Resize((32, 32)),
-#         *PIXEL_CNN_TRANSFORM.transforms,
-#     ]
-# )
-
-# VAE_HF_TRANSORM = transforms.Compose(
-#     [
-#         transforms.Lambda(lambda img: img.convert("RGB")),
-#         transforms.Resize((32, 32)),
-#         *VAE_TRANSFORM.transforms,
-#     ]
-# )  # tiny-imagenet dataset is of poor quality, can occur monochromatic photo; resize to match cifar size
 
 
 class DatasetType(Enum):
