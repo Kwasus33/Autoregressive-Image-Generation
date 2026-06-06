@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch import optim
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
@@ -135,8 +136,10 @@ class PixelCNN(pl.LightningModule):
         Inputs:
             x - Image tensor with integer values between 0 and num_classes-1 (e.g. 0..255 for pixels).
         """
-        # At first input must be denormalized (0..255) as loss function caompares predicted pixel value 0..255 to it's orignal value from input !
-        x = (x.float() / float(self.num_classes - 1)) * 2 - 1  # Scale input e.g. for pixels from 0 to 255 back to -1 to 1
+        # At first input must be denormalized (0..255) as loss function campares predicted pixel value 0..255 to it's orignal value from input !
+        x = (
+            x.float() / float(self.num_classes - 1)
+        ) * 2 - 1  # Scale input e.g. for pixels from 0 to 255 back to -1 to 1 or for tokens indices of value [0, K-1] to [-1, 1]
 
         v_stack = self.conv_vstack(x)
         h_stack = self.conv_hstack(x)
@@ -144,7 +147,9 @@ class PixelCNN(pl.LightningModule):
             v_stack, h_stack = layer(v_stack, h_stack)
 
         out = self.conv_out(F.elu(h_stack))  # 1x1 classification conv, applied ELU before 1x1 conv for non-linearity on residual connection
-        out = out.reshape(out.shape[0], self.num_classes, out.shape[1] // self.num_classes, out.shape[2], out.shape[3])  # [B, Classes, Ch, H, W]
+        out = out.reshape(
+            out.shape[0], self.num_classes, out.shape[1] // self.num_classes, out.shape[2], out.shape[3]
+        )  # [B, Classes_preds, Ch, H, W]
         return out
 
     def calc_likelihood(self, x):
@@ -152,7 +157,7 @@ class PixelCNN(pl.LightningModule):
         pred = self.forward(x)
         nll = F.cross_entropy(pred, x, reduction="none")
         bpd = nll.mean(dim=[1, 2, 3]) * np.log2(np.exp(1))
-        return bpd.mean()
+        return bpd.mean(), pred
 
     @torch.no_grad()
     def sample(self, img_shape, img=None, device=torch.device("cpu")):
@@ -188,26 +193,29 @@ class PixelCNN(pl.LightningModule):
 
     # Methods called {phase}_step are needed for pl.Trainer to automate training
     def training_step(self, batch, batch_idx):
-        loss = self.calc_likelihood(batch[0])
+        loss, pred = self.calc_likelihood(batch[0])
         self.log("train_bpd", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss = self.calc_likelihood(batch[0])
+        loss, pred = self.calc_likelihood(batch[0])
         self.log("val_bpd", loss)
 
     def test_step(self, batch, batch_idx):
-        loss = self.calc_likelihood(batch[0])
+        loss, pred = self.calc_likelihood(batch[0])
         self.log("test_bpd", loss)
+        # if batch_idx == 0:
+        #     self.logger.experiment.add_image("Test_Predictions", pred[0], self.current_epoch)
 
 
 def train_pixel_cnn(epochs: int, dataloaders: DataLoader, device: torch.device, model_path: str, **kwargs):
     trainer = pl.Trainer(
-        default_root_dir=os.path.join(model_path, "PixelCNN"),
+        default_root_dir=model_path,
         # accelerator="auto",
         accelerator="gpu" if str(device).startswith("cuda") else "mps" if str(device).startswith("mps") else "cpu",
         devices=1,
         max_epochs=epochs,
+        logger=CSVLogger(model_path, name="logs_pixelcnn"),
         enable_progress_bar=True,
         enable_model_summary=True,
         log_every_n_steps=1,
