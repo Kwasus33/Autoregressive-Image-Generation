@@ -70,7 +70,7 @@ class HorizontalStackConvolution(MaskedConvolution):
         mask = torch.ones(1, kernel_size)
         mask[0, kernel_size // 2 + 1 :] = 0
 
-        # For the very first convolution, we will also mask the center pixel
+        # for first convolution, the center pixel is masked
         if mask_center:
             mask[0, kernel_size // 2] = 0
 
@@ -106,16 +106,23 @@ class GatedMaskedConv(nn.Module):
 
 
 class PixelCNN(pl.LightningModule):
-    def __init__(self, c_in, c_hidden, num_classes):
+    def __init__(self, c_in, c_hidden, num_classes, on_tokens=False):
         super().__init__()
         self.save_hyperparameters()
-
         # operations based on number of classes - works for 256 classes of pixel values as well as 16 classes of token values
         self.num_classes = num_classes
-        # Initial convolutions skipping the center pixel
-        self.conv_vstack = VerticalStackConvolution(c_in, c_hidden, mask_center=True)
-        self.conv_hstack = HorizontalStackConvolution(c_in, c_hidden, mask_center=True)
-        # Convolution block of PixelCNN. We use dilation instead of downscaling
+        self.on_tokens = on_tokens
+
+        if self.on_tokens:
+            self.embedding = nn.Embedding(num_classes + 1, c_hidden, padding_idx=num_classes)  # adds PAD token - used as token mask in Masked Conv
+            conv_c_in = c_hidden
+        else:
+            conv_c_in = c_in
+
+        # initial convolutions skip the center pixel - mask_center=True
+        self.conv_vstack = VerticalStackConvolution(conv_c_in, c_hidden, mask_center=True)
+        self.conv_hstack = HorizontalStackConvolution(conv_c_in, c_hidden, mask_center=True)
+        # convolution block of PixelCNN (dilation used instead of downscaling)
         self.conv_layers = nn.ModuleList(
             [
                 GatedMaskedConv(c_hidden),
@@ -127,10 +134,10 @@ class PixelCNN(pl.LightningModule):
                 GatedMaskedConv(c_hidden),
             ]
         )
-        # Output classification convolution (1x1) - e.g. predict value of 8bit pixel 0..255 (256 classes)
-        self.conv_out = nn.Conv2d(c_hidden, c_in * self.num_classes, kernel_size=1, padding=0)
 
-        # self.example_input_array = train_set[0][0][None]
+        # Output classification convolution (1x1) - e.g. predict value of 8bit pixel 0..255 (256 classes), predict value of token idx [0..K-1]
+        out_channels = num_classes if self.on_tokens else c_in * num_classes
+        self.conv_out = nn.Conv2d(c_hidden, out_channels, kernel_size=1, padding=0)
 
     def forward(self, x):
         """
@@ -139,9 +146,14 @@ class PixelCNN(pl.LightningModule):
             x - Image tensor with integer values between 0 and num_classes-1 (e.g. 0..255 for pixels).
         """
         # At first input must be denormalized (0..255) as loss function campares predicted pixel value 0..255 to it's orignal value from input !
-        x = (
-            x.float() / float(self.num_classes - 1)
-        ) * 2 - 1  # Scale input e.g. for pixels from 0 to 255 back to -1 to 1 or for tokens indices of value [0, K-1] to [-1, 1]
+        if self.on_tokens:
+            if x.dim() == 4:
+                x = x.squeeze(1)  # gets rid of channel dim (redundant for tokens - kept only to unify operations on pixels and tokens)
+            # if it's tokens input is x.shape=[B, H, W] and is tranformed to [B, in_channels=c_hidden(vec embedding size), H, W] to go through conv
+            x = self.embedding(x).permute(0, 3, 1, 2).contiguous()
+            # permute only swaps indexes, contiguous makes data inline in memory (inline allignment required by conv)
+        else:
+            x = (x.float() / float(self.num_classes - 1)) * 2 - 1
 
         v_stack = self.conv_vstack(x)
         h_stack = self.conv_hstack(x)
@@ -149,16 +161,17 @@ class PixelCNN(pl.LightningModule):
             v_stack, h_stack = layer(v_stack, h_stack)
 
         out = self.conv_out(F.elu(h_stack))  # 1x1 classification conv, applied ELU before 1x1 conv for non-linearity on residual connection
-        out = out.reshape(
-            out.shape[0], self.num_classes, out.shape[1] // self.num_classes, out.shape[2], out.shape[3]
-        )  # [B, Classes_preds, Ch, H, W]
+        if not self.on_tokens:
+            # [B, Classes_preds, Ch, H, W] for imgs, [B, Ch=num_embedding_classes, H, W] for tokens
+            out = out.reshape(out.shape[0], self.num_classes, out.shape[1] // self.num_classes, out.shape[2], out.shape[3])
         return out
 
     def calc_likelihood(self, x):
         # Forward pass with bpd likelihood calculation
         pred = self.forward(x)
         nll = F.cross_entropy(pred, x, reduction="none")
-        bpd = nll.mean(dim=[1, 2, 3]) * np.log2(np.exp(1))
+        dims = [1, 2] if self.on_tokens else [1, 2, 3]
+        bpd = nll.mean(dim=dims) * np.log2(np.exp(1))
         return bpd.mean(), pred
 
     @torch.no_grad()
@@ -172,21 +185,23 @@ class PixelCNN(pl.LightningModule):
                              should be -1 in the input tensor.
         """
         if img is None:
-            img = torch.zeros(img_shape, dtype=torch.long).to(device) - 1  # Create empty image
+            pad = self.num_classes if self.on_tokens else -1
+            img = torch.zeros(img_shape, dtype=torch.long).to(device) + pad  # empty img filled with '-1' or 'pad_token'
 
-        # Generation loop
         for h in tqdm(range(img_shape[2]), leave=False):
             for w in range(img_shape[3]):
                 for c in range(img_shape[1]):
-                    # Skip if not to be filled (-1)
-                    if (img[:, c, h, w] != -1).all().item():
+                    # skip if not to be filled (-1)
+                    if (img[:, c, h, w] != pad).all().item():
                         continue
-                    # For efficiency, we only have to input the upper part of the image
-                    # as all other parts will be skipped by the masked convolutions anyways
+                    # only the upper part of the image is passed, as all other parts will be skipped by the masked convolutions
                     pred = self.forward(img[:, :, : h + 1, :])
-                    probs = F.softmax(pred[:, :, c, h, w], dim=-1)
+                    if self.on_tokens:
+                        probs = F.softmax(pred[:, :, h, w], dim=-1)  # [B, Classes, H, W]
+                    else:
+                        probs = F.softmax(pred[:, :, c, h, w], dim=-1)  # [B, Classes, Channels, H, W]
                     img[:, c, h, w] = torch.multinomial(probs, num_samples=1).squeeze(dim=-1)
-        return img
+        return img.squeeze(1) if self.on_tokens else img  # ([B, Ch=1, H, W] --> [B, H, W]) if on_tokens else  [B, Ch, H, W]
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=1e-3)
@@ -202,10 +217,11 @@ class PixelCNN(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss, pred = self.calc_likelihood(batch[0])
         self.log("val_bpd", loss)
-        if batch_idx == 0:
+        print(f"\nValidation bpd: {loss:4.3f}")
+        if not self.on_tokens and batch_idx == 0:
             pred_pixels = pred.argmax(dim=1)
-            pred_pixels = pred_pixels.float() / 255.0
-            real_imgs = batch[0] / 255.0
+            pred_pixels = pred_pixels.float() / self.num_classes
+            real_imgs = batch[0] / self.num_classes
             visualize_val_reconstruction(real_imgs.cpu(), pred_pixels.cpu())
 
     def test_step(self, batch, batch_idx):
