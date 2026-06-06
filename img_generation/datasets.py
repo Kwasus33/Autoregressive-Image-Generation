@@ -12,12 +12,14 @@ def discretize(sample):
     return (sample * 255).to(torch.long)
 
 
+""" In currenct impl Data for Baseline VAE must be transformed to 28x28 mono """
+
 PIXEL_CNN_TRANSFORM = transforms.Compose([transforms.ToTensor(), discretize])
 
 VAE_TRANSFORM_MONO = transforms.Compose(
     [
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5], std=[0.5]),
+        # transforms.Normalize(mean=[0.5], std=[0.5]),
     ]
 )
 
