@@ -19,14 +19,10 @@ class ConvBlock(nn.Module):
         self.hidden_dim_ch = hidden_dim_ch
 
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(
-                in_channels=self.input_channels, out_channels=self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1
-            ),  # 32x32 -> 16x16 [(32+1+1-4)//2 + 1]; 28x28 -> 14x14
+            nn.Conv2d(in_channels=self.input_channels, out_channels=self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1),  # 28x28 -> 14x14
             nn.GroupNorm(num_groups=8, num_channels=self.hidden_dim_ch),
             nn.SiLU(),
-            nn.Conv2d(
-                in_channels=self.hidden_dim_ch, out_channels=2 * self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1
-            ),  # 16x16 -> 8x8; 14x14 -> 7x7
+            nn.Conv2d(in_channels=self.hidden_dim_ch, out_channels=2 * self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1),  # 14x14 -> 7x7
             nn.GroupNorm(num_groups=8, num_channels=2 * self.hidden_dim_ch),
         )
 
@@ -45,12 +41,12 @@ class DeconvBlock(nn.Module):
         self.de_conv = nn.Sequential(
             nn.ConvTranspose2d(
                 in_channels=2 * self.hidden_dim_ch, out_channels=self.hidden_dim_ch, kernel_size=(4, 4), stride=2, padding=1
-            ),  # 8x8 -> 16x16
+            ),  # 7x7 -> 14x14
             nn.GroupNorm(num_groups=8, num_channels=self.hidden_dim_ch),
             nn.SiLU(),
             nn.ConvTranspose2d(
                 in_channels=self.hidden_dim_ch, out_channels=self.output_channels, kernel_size=(4, 4), stride=2, padding=1
-            ),  # 16x16-> 32x32
+            ),  # 14x14-> 28x28
         )
 
     def forward(self, x):
@@ -75,11 +71,11 @@ class Encoder(nn.Module):
         self.flatten = nn.Flatten()
         self.label_embed = nn.Embedding(num_embeddings=self.num_classes, embedding_dim=self.class_embed_dim)
         self.fc_mean = nn.Linear(
-            in_features=2 * self.hidden_dim_ch * 8 * 8 + self.class_embed_dim,
+            in_features=2 * self.hidden_dim_ch * 7 * 7 + self.class_embed_dim,
             out_features=self.latent_dim,
         )  # optimal latent_dim is around out_features divided by 8 or 16 or 32
         self.fc_logvar = nn.Linear(
-            in_features=2 * self.hidden_dim_ch * 8 * 8 + self.class_embed_dim,
+            in_features=2 * self.hidden_dim_ch * 7 * 7 + self.class_embed_dim,
             out_features=self.latent_dim,
         )
 
@@ -107,7 +103,7 @@ class Decoder(nn.Module):
         self.label_embed = nn.Embedding(num_embeddings=self.num_classes, embedding_dim=self.class_embed_dim)
         self.fc = nn.Linear(
             in_features=self.latent_dim + self.class_embed_dim,
-            out_features=2 * self.hidden_dim_ch * 8 * 8,
+            out_features=2 * self.hidden_dim_ch * 7 * 7,
         )
         self.de_conv_block = DeconvBlock(hidden_dim_ch, output_channels)
         self.sigmoid = nn.Sigmoid()
@@ -118,7 +114,7 @@ class Decoder(nn.Module):
         z = torch.cat([z, y_embed], dim=1)
         z = self.fc(z)
         # ^^^ tested with and without act after linear layer - left without as features from latent space are from normal distro - wrong activation may too much influence the negative ones
-        z = z.view([-1, 2 * self.hidden_dim_ch, 8, 8])
+        z = z.view([-1, 2 * self.hidden_dim_ch, 7, 7])
         x_hat = self.de_conv_block(z)
         return self.sigmoid(x_hat)
 
