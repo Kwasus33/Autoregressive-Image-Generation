@@ -1,0 +1,4 @@
+Model,Quality metric,FID,Gen time,Per image
+CVAE,12.0205 (MSE / image),68.8,0.02 s,0.000 s
+PixelCNN,2.7512 (pixel space),53.2,1059.16 s,2.069 s
+PixelCNN on Tokens,1.7103 (token space),48.3,7.38 s,0.014 s
